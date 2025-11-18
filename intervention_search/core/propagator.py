@@ -19,8 +19,109 @@ import networkx as nx
 from typing import Dict, Set, List, Optional, Tuple
 from dataclasses import dataclass
 import warnings
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
 warnings.filterwarnings('ignore')
+
+
+def _run_simulation_worker(
+    sim_idx: int,
+    initial_values: Dict[str, float],
+    intervened_nodes: Set[str],
+    intervention_values: Dict[str, float],
+    propagator_state: Dict,
+    seed_base: int
+) -> Dict[str, float]:
+    """
+    Worker function for parallel Monte Carlo simulation.
+
+    This function is defined at module level to be picklable for multiprocessing.
+
+    Args:
+        sim_idx: Simulation index (for seeding)
+        initial_values: Initial node values
+        intervened_nodes: Nodes being intervened on
+        intervention_values: Intervention values
+        propagator_state: State dict with graph, models, etc.
+        seed_base: Base random seed
+
+    Returns:
+        Dictionary of predicted values for all nodes
+    """
+    # Set unique seed for this simulation
+    np.random.seed(seed_base + sim_idx)
+
+    # Reconstruct necessary state
+    topological_order = propagator_state['topological_order']
+    regressors_dict = propagator_state['regressors_dict']
+    baseline_stats = propagator_state['baseline_stats']
+    model_metrics = propagator_state['model_metrics']
+    node_types = propagator_state['node_types']
+    graph = propagator_state['graph']
+
+    # Run simulation (same logic as _single_simulation)
+    predicted_values = initial_values.copy()
+
+    # Fix intervened nodes
+    for node in intervened_nodes:
+        predicted_values[node] = intervention_values[node]
+
+    # Propagate through descendants
+    for node in topological_order:
+        if node in intervened_nodes:
+            continue
+
+        parents = list(graph.predecessors(node))
+
+        if not parents:
+            # Root node: sample from baseline distribution
+            if node in baseline_stats:
+                stats = baseline_stats[node]
+                std = stats.get('std', 0.0)
+                if std > 0:
+                    noise = np.random.normal(0, std * 0.1)
+                    predicted_values[node] = predicted_values.get(node, stats.get('mean', 0)) + noise
+            continue
+
+        # Get model
+        if node not in regressors_dict:
+            continue
+
+        regressor, scaler = regressors_dict[node]
+        if regressor is None:
+            continue
+
+        # Get parent values
+        parent_values = np.array([[predicted_values[p] for p in parents]])
+
+        # Predict with uncertainty
+        try:
+            is_categorical = node_types.get(node) == 'categorical'
+
+            if is_categorical:
+                predicted_class = regressor.predict(parent_values)[0]
+                predicted_values[node] = float(predicted_class)
+            else:
+                base_prediction = regressor.predict(parent_values)[0]
+
+                # Add noise based on model RMSE
+                if node in model_metrics:
+                    metrics = model_metrics[node]
+                    if metrics.get('model_type') == 'regression':
+                        rmse = metrics.get('rmse', 0.0)
+                        noise = np.random.normal(0, rmse)
+                        predicted_values[node] = base_prediction + noise
+                    else:
+                        predicted_values[node] = base_prediction
+                else:
+                    predicted_values[node] = base_prediction
+
+        except Exception:
+            # Fallback to baseline
+            predicted_values[node] = initial_values.get(node, 0.0)
+
+    return predicted_values
 
 
 @dataclass
@@ -51,7 +152,9 @@ class MonteCarloPropagator:
         model_metrics: Dict,
         node_types: Dict,
         n_simulations: int = 1000,
-        random_seed: Optional[int] = None
+        random_seed: Optional[int] = None,
+        use_parallel: bool = False,
+        n_jobs: int = -1
     ):
         """
         Initialize the Monte Carlo propagator.
@@ -64,6 +167,8 @@ class MonteCarloPropagator:
             node_types: Type of each node (categorical/continuous)
             n_simulations: Number of Monte Carlo samples (default: 1000)
             random_seed: Random seed for reproducibility
+            use_parallel: Enable parallel processing for Monte Carlo (default: False)
+            n_jobs: Number of parallel jobs (-1 = all CPUs, default: -1)
         """
         self.graph = graph
         self.regressors_dict = regressors_dict
@@ -71,6 +176,14 @@ class MonteCarloPropagator:
         self.model_metrics = model_metrics
         self.node_types = node_types
         self.n_simulations = n_simulations
+        self.use_parallel = use_parallel
+        self.random_seed = random_seed
+
+        # Determine number of jobs
+        if n_jobs == -1:
+            self.n_jobs = max(1, cpu_count() - 1)  # Leave one CPU free
+        else:
+            self.n_jobs = max(1, min(n_jobs, cpu_count()))
 
         if random_seed is not None:
             np.random.seed(random_seed)
@@ -109,18 +222,50 @@ class MonteCarloPropagator:
         # Initialize storage for samples
         node_samples = {node: np.zeros(self.n_simulations) for node in self.graph.nodes()}
 
-        # Run Monte Carlo simulations
-        for sim_idx in range(self.n_simulations):
-            # Single simulation run
-            sim_result = self._single_simulation(
-                initial_values,
-                intervened_nodes,
-                intervention_values
+        # Run Monte Carlo simulations (with optional parallelization)
+        if self.use_parallel and self.n_simulations >= 100:
+            # Parallel execution for large simulation counts
+            # Split simulations into chunks for each process
+            chunk_size = max(50, self.n_simulations // self.n_jobs)
+
+            # Create simulation function with fixed parameters
+            sim_func = partial(
+                _run_simulation_worker,
+                initial_values=initial_values,
+                intervened_nodes=intervened_nodes,
+                intervention_values=intervention_values,
+                propagator_state={
+                    'topological_order': self.topological_order,
+                    'regressors_dict': self.regressors_dict,
+                    'baseline_stats': self.baseline_stats,
+                    'model_metrics': self.model_metrics,
+                    'node_types': self.node_types,
+                    'graph': self.graph
+                },
+                seed_base=self.random_seed if self.random_seed else 0
             )
 
-            # Store results
-            for node, value in sim_result.items():
-                node_samples[node][sim_idx] = value
+            # Run simulations in parallel
+            with Pool(processes=self.n_jobs) as pool:
+                results = pool.map(sim_func, range(self.n_simulations))
+
+            # Collect results
+            for sim_idx, sim_result in enumerate(results):
+                for node, value in sim_result.items():
+                    node_samples[node][sim_idx] = value
+        else:
+            # Sequential execution (default - more reliable and reproducible)
+            for sim_idx in range(self.n_simulations):
+                # Single simulation run
+                sim_result = self._single_simulation(
+                    initial_values,
+                    intervened_nodes,
+                    intervention_values
+                )
+
+                # Store results
+                for node, value in sim_result.items():
+                    node_samples[node][sim_idx] = value
 
         # Compute summary statistics
         node_means = {node: np.mean(samples) for node, samples in node_samples.items()}
@@ -328,9 +473,24 @@ class MonteCarloPropagator:
             if abs(no_interv_mean) > 1e-9:
                 pct_effect = (effect_mean / no_interv_mean) * 100
 
-            # Confidence intervals for effect
-            effect_ci_90 = (np.percentile(effect_samples, 5), np.percentile(effect_samples, 95))
-            effect_ci_50 = (np.percentile(effect_samples, 25), np.percentile(effect_samples, 75))
+            # Confidence intervals for effect (ABSOLUTE)
+            effect_ci_90_abs = (np.percentile(effect_samples, 5), np.percentile(effect_samples, 95))
+            effect_ci_50_abs = (np.percentile(effect_samples, 25), np.percentile(effect_samples, 75))
+
+            # Convert CIs to PERCENTAGE to match pct_effect
+            # FIX: This resolves wide CI issue - CIs must be in same units as pct_effect
+            if abs(no_interv_mean) > 1e-9:
+                effect_ci_90_pct = (
+                    (effect_ci_90_abs[0] / no_interv_mean) * 100,
+                    (effect_ci_90_abs[1] / no_interv_mean) * 100
+                )
+                effect_ci_50_pct = (
+                    (effect_ci_50_abs[0] / no_interv_mean) * 100,
+                    (effect_ci_50_abs[1] / no_interv_mean) * 100
+                )
+            else:
+                effect_ci_90_pct = effect_ci_90_abs
+                effect_ci_50_pct = effect_ci_50_abs
 
             outcome_effects[outcome] = {
                 'no_intervention_mean': no_interv_mean,
@@ -340,8 +500,10 @@ class MonteCarloPropagator:
                 'absolute_effect': effect_mean,
                 'absolute_effect_std': np.std(effect_samples),
                 'pct_effect': pct_effect,
-                'ci_90': effect_ci_90,
-                'ci_50': effect_ci_50,
+                'ci_90': effect_ci_90_pct,  # Now in percentage!
+                'ci_50': effect_ci_50_pct,  # Now in percentage!
+                'ci_90_absolute': effect_ci_90_abs,  # Keep absolute for reference
+                'ci_50_absolute': effect_ci_50_abs,  # Keep absolute for reference
                 'effect_samples': effect_samples
             }
 
