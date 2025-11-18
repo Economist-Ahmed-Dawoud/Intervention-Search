@@ -329,6 +329,14 @@ class InterventionSearch:
                     outcome_node
                 )
 
+                # Evaluate quality for this intervention path
+                path_nodes = self._get_causal_path_nodes(node, outcome_node)
+                quality_info = self.quality_gate.evaluate_path_quality(
+                    path_nodes,
+                    self.model_metrics,
+                    self.baseline_stats
+                )
+
                 result_entry = {
                     'intervention_type': 'single',
                     'nodes': [node],
@@ -345,6 +353,7 @@ class InterventionSearch:
                         detailed_result['std'],
                         [node]
                     ),
+                    'quality': quality_info,  # FIX: Add quality metrics
                     'search_iterations': search_result.iterations
                 }
 
@@ -399,6 +408,19 @@ class InterventionSearch:
                     outcome_node
                 )
 
+                # Evaluate quality for combination intervention
+                # Use the shortest/strongest path among the two nodes
+                path_nodes_1 = self._get_causal_path_nodes(node1, outcome_node)
+                path_nodes_2 = self._get_causal_path_nodes(node2, outcome_node)
+                # Choose path with better quality
+                quality_1 = self.quality_gate.evaluate_path_quality(
+                    path_nodes_1, self.model_metrics, self.baseline_stats
+                )
+                quality_2 = self.quality_gate.evaluate_path_quality(
+                    path_nodes_2, self.model_metrics, self.baseline_stats
+                )
+                quality_info = quality_1 if quality_1['quality_score_geom_mean'] >= quality_2['quality_score_geom_mean'] else quality_2
+
                 result_entry = {
                     'intervention_type': 'combination',
                     'nodes': [node1, node2],
@@ -417,6 +439,7 @@ class InterventionSearch:
                         detailed_result['std'],
                         [node1, node2]
                     ),
+                    'quality': quality_info,  # FIX: Add quality metrics
                     'search_iterations': opt_result['iterations']
                 }
 
@@ -531,6 +554,28 @@ class InterventionSearch:
                 self.baseline_stats
             )
         return self._quality_summary
+
+    def _get_causal_path_nodes(self, source: str, target: str) -> List[str]:
+        """
+        Extract causal path nodes from source to target.
+
+        For simplicity, returns shortest path. In production,
+        might want to consider all paths or strongest path.
+
+        Args:
+            source: Intervention node
+            target: Outcome node
+
+        Returns:
+            List of nodes in the causal path
+        """
+        try:
+            # Get shortest path
+            path = nx.shortest_path(self.graph, source, target)
+            return path
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            # No path exists, return just the nodes
+            return [source, target]
 
     def _print_results(self, best, all_candidates, target_change):
         """Print results summary"""
