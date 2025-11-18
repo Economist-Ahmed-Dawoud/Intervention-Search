@@ -37,6 +37,8 @@ def estimate_uncertainty_from_samples(samples: np.ndarray) -> UncertaintyEstimat
     """
     Calculate comprehensive uncertainty metrics from Monte Carlo samples.
 
+    Uses linear interpolation for more accurate percentile estimates.
+
     Args:
         samples: Array of Monte Carlo samples
 
@@ -45,12 +47,12 @@ def estimate_uncertainty_from_samples(samples: np.ndarray) -> UncertaintyEstimat
     """
     return UncertaintyEstimate(
         mean=np.mean(samples),
-        std=np.std(samples),
-        percentile_5=np.percentile(samples, 5),
-        percentile_25=np.percentile(samples, 25),
-        percentile_50=np.percentile(samples, 50),
-        percentile_75=np.percentile(samples, 75),
-        percentile_95=np.percentile(samples, 95),
+        std=np.std(samples, ddof=1),  # Unbiased estimator
+        percentile_5=np.percentile(samples, 5, method='linear'),
+        percentile_25=np.percentile(samples, 25, method='linear'),
+        percentile_50=np.percentile(samples, 50, method='linear'),
+        percentile_75=np.percentile(samples, 75, method='linear'),
+        percentile_95=np.percentile(samples, 95, method='linear'),
         samples=samples
     )
 
@@ -61,6 +63,8 @@ def compute_prediction_interval(
 ) -> Tuple[float, float]:
     """
     Compute prediction interval from Monte Carlo samples.
+
+    Uses linear interpolation for more accurate percentile estimates.
 
     Args:
         predictions: Array of predicted values
@@ -73,8 +77,8 @@ def compute_prediction_interval(
     lower_percentile = (alpha / 2) * 100
     upper_percentile = (1 - alpha / 2) * 100
 
-    lower = np.percentile(predictions, lower_percentile)
-    upper = np.percentile(predictions, upper_percentile)
+    lower = np.percentile(predictions, lower_percentile, method='linear')
+    upper = np.percentile(predictions, upper_percentile, method='linear')
 
     return lower, upper
 

@@ -57,7 +57,7 @@ class InterventionSearch:
         self,
         graph: nx.DiGraph,
         ht_model,  # Trained HT model from ht_categ.py
-        n_simulations: int = 1000,
+        n_simulations: int = 5000,
         strict_quality_mode: bool = False,
         random_seed: Optional[int] = 42
     ):
@@ -67,7 +67,7 @@ class InterventionSearch:
         Args:
             graph: Causal DAG (networkx DiGraph)
             ht_model: Trained HT model with regressors, baseline stats, etc.
-            n_simulations: Number of Monte Carlo simulations (default: 1000)
+            n_simulations: Number of Monte Carlo simulations (default: 5000, increased for narrower CIs)
             strict_quality_mode: If True, apply strict quality gates
             random_seed: Random seed for reproducibility
         """
