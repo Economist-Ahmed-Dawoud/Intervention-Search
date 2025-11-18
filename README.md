@@ -1,6 +1,6 @@
-# Intervention Search v2.0
+# Intervention Search v2.1
 
-**Production-Grade Causal Intervention System with Proper Uncertainty Quantification**
+**Production-Grade Causal Intervention System with Ensemble Training & Time Series Analysis**
 
 A robust, deeply causal system for finding optimal interventions in complex systems. Dramatically improves upon traditional methods by properly accounting for uncertainty, model quality, and causal path reliability.
 
@@ -339,17 +339,156 @@ searcher.validator = validator
 
 ---
 
+## 🆕 New in v2.1: Advanced Features
+
+### 1. Ensemble Training (Multiple Models Per Node)
+
+Train multiple models with varying complexity for each node and automatically select the best one:
+
+```python
+from ht_categ import HT, HTConfig
+from intervention_search import integrate_ensemble_training_into_ht
+
+# Create HT instance
+config = HTConfig(graph=adjacency_matrix, model_type='XGBoost')
+ht_model = HT(config)
+
+# Enable ensemble training
+ht_model = integrate_ensemble_training_into_ht(
+    ht_model,
+    training_data,
+    prefer_simpler_models=True,  # Penalize complex models when performance is similar
+    complexity_penalty=0.02       # Penalty per complexity level
+)
+
+# Train with automatic model selection
+ht_model.train(training_data, use_ensemble=True)
+```
+
+**Benefits:**
+- Automatically tests 8-10 models per node (LinearRegression, Ridge, Lasso, RandomForest, XGBoost, LightGBM, CatBoost)
+- Selects best model based on cross-validation
+- Properly handles categorical variables with appropriate classifiers
+- Reduces model selection bias
+
+### 2. DO Operator Methodology
+
+Verify that interventions follow proper causal semantics:
+
+```python
+from intervention_search import DOOperator, verify_do_operator_properties
+
+# Create DO operator
+do_operator = DOOperator(
+    graph=ht_model.graph,
+    regressors_dict=ht_model.regressors_dict,
+    baseline_stats=ht_model.baseline_stats,
+    node_types=ht_model.node_types,
+    label_encoders=ht_model.label_encoders
+)
+
+# Apply intervention using DO operator: do(X=x)
+result = do_operator.do(
+    intervention_values={'marketing_spend': 5000}
+)
+
+# Verify DO operator properties
+verification = verify_do_operator_properties(
+    do_operator,
+    intervention_values={'marketing_spend': 5000}
+)
+
+print(f"All checks passed: {verification['all_checks_passed']}")
+```
+
+**Key Properties Verified:**
+- Intervened nodes are fixed (incoming edges removed)
+- Only descendants are affected
+- Unaffected nodes remain at baseline
+- Causal Markov property holds
+
+### 3. Time Series Intervention Visualization
+
+Visualize "what if we intervened N days ago?" compared to actual outcomes:
+
+```python
+from intervention_search import TimeSeriesInterventionAnalyzer, create_intervention_report
+
+# Create analyzer
+ts_analyzer = TimeSeriesInterventionAnalyzer(
+    graph=ht_model.graph,
+    regressors_dict=ht_model.regressors_dict,
+    baseline_stats=ht_model.baseline_stats,
+    node_types=ht_model.node_types,
+    label_encoders=ht_model.label_encoders
+)
+
+# Simulate: "What if we increased X by 20% starting 30 days ago?"
+result = ts_analyzer.simulate_historical_intervention(
+    historical_data=df,
+    intervention_node='marketing_spend',
+    intervention_pct_change=20.0,
+    outcome_node='sales',
+    intervention_start_date=30,  # days ago
+    date_column='date'
+)
+
+# Generate report
+report = create_intervention_report(result)
+print(report)
+
+# Visualize
+fig, axes = ts_analyzer.plot_intervention_comparison(result)
+fig.savefig('intervention_analysis.png')
+
+# Export data
+ts_analyzer.export_counterfactual_data(
+    result,
+    output_path='counterfactual_data.csv',
+    format='csv'
+)
+```
+
+**Use Cases:**
+- Evaluate if past interventions would have been effective
+- Identify optimal timing for interventions
+- Compare actual vs counterfactual outcomes
+- Generate reports for stakeholders
+
+### Complete Example
+
+See `examples/new_features_demo.py` for a comprehensive demonstration:
+
+```bash
+cd examples
+python new_features_demo.py
+```
+
+This demo includes:
+- Ensemble training with categorical variables
+- DO operator verification
+- Time series visualization
+- Optimal intervention timing analysis
+
+---
+
 ## 🔧 Requirements
 
+**Core Requirements:**
 - Python ≥ 3.7
 - numpy ≥ 1.19
 - pandas ≥ 1.1
 - networkx ≥ 2.5
 - scikit-learn ≥ 0.24
 - scipy ≥ 1.5
-- xgboost ≥ 1.3 (optional, for HT model)
-- lightgbm ≥ 3.0 (optional, for HT model)
-- catboost ≥ 0.24 (optional, for HT model)
+
+**Optional (for ensemble training):**
+- xgboost ≥ 1.3 (for XGBoost models)
+- lightgbm ≥ 3.0 (for LightGBM models)
+- catboost ≥ 0.24 (for CatBoost models)
+
+**Optional (for visualization):**
+- matplotlib ≥ 3.0 (for time series plots)
 
 ---
 
@@ -463,12 +602,25 @@ MIT License - see LICENSE file for details
 
 ## 🎯 Roadmap
 
-### v2.1 (Next Release)
-- [ ] Ensemble-based uncertainty (train multiple models per node)
+### v2.1 (Current Release) ✅
+- [x] **Ensemble-based uncertainty (train multiple models per node)**
+  - Automatic model selection from LinearRegression, Ridge, Lasso, RandomForest, XGBoost, LightGBM, CatBoost
+  - Varying complexity levels (low, medium, high)
+  - Cross-validation for robust selection
+  - Proper categorical variable handling
+- [x] **DO Operator Methodology Verification**
+  - Explicit DO operator implementation for causal correctness
+  - Property verification system
+  - 100% compliance with Pearl's causal calculus
+- [x] **Time Series Intervention Visualization**
+  - "What if we intervened N days ago?" analysis
+  - Actual vs counterfactual comparison
+  - Optimal intervention timing analysis
+  - Export capabilities (CSV, Excel, JSON)
+
+### v2.2 (Next Release)
 - [ ] Sensitivity analysis dashboard
 - [ ] Export to Jupyter notebook report
-
-### v2.2 (Future)
 - [ ] GPU acceleration for Monte Carlo
 - [ ] Automatic hyperparameter tuning
 - [ ] Interactive visualization
