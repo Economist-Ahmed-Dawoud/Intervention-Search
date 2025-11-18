@@ -36,19 +36,26 @@ Quick Start:
 Version: 2.0.0
 """
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 __author__ = "Causal AI Team"
 
 from .api.intervention_search import InterventionSearch
 from .core.propagator import MonteCarloPropagator
 from .core.quality_metrics import QualityGate, ModelQualityReport
 from .core.path_analyzer import PathSensitivityAnalyzer
+from .core.ensemble_trainer import EnsembleTrainer, integrate_ensemble_training_into_ht
+from .core.do_operator import DOOperator, verify_do_operator_properties
 from .search.validators import InterventionValidator, OutOfDistributionDetector
 from .search.ranker import InterventionRanker, RankingWeights
 from .search.optimizer import (
     AdaptiveGridSearch,
     BayesianOptimizer,
     MultiNodeOptimizer
+)
+from .visualization import (
+    TimeSeriesInterventionAnalyzer,
+    TimeSeriesInterventionResult,
+    create_intervention_report
 )
 
 __all__ = [
@@ -60,6 +67,10 @@ __all__ = [
     'QualityGate',
     'ModelQualityReport',
     'PathSensitivityAnalyzer',
+    'EnsembleTrainer',
+    'integrate_ensemble_training_into_ht',
+    'DOOperator',
+    'verify_do_operator_properties',
 
     # Search components
     'InterventionValidator',
@@ -71,4 +82,9 @@ __all__ = [
     'AdaptiveGridSearch',
     'BayesianOptimizer',
     'MultiNodeOptimizer',
+
+    # Visualization
+    'TimeSeriesInterventionAnalyzer',
+    'TimeSeriesInterventionResult',
+    'create_intervention_report',
 ]
