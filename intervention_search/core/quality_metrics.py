@@ -177,9 +177,12 @@ class QualityGate:
             return {
                 'path': ' → '.join(path_nodes),
                 'quality_grade': 'Unknown',
-                'quality_score': 0.5,
+                'quality_score_min': 0.5,
+                'quality_score_mean': 0.5,
+                'quality_score_geom_mean': 0.5,
                 'is_reliable': False,
                 'weakest_link': None,
+                'model_reports': [],
                 'warnings': ['No models found in path']
             }
 
