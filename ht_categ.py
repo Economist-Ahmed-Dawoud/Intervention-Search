@@ -57,14 +57,29 @@ class HTConfig(BaseConfig):
         aggregator: Function name for aggregating node scores ("max", "min", or "sum"). Default is "max".
         root_cause_top_k: Maximum number of root causes to return. Default is 3.
         model_type: The model to use for training nodes with parents. Options are:
-                    "LinearRegression", "CatBoost", "Xgboost", "LightGBM", "RandomForest".
+                    "LinearRegression", "CatBoost", "Xgboost", "LightGBM", "RandomForest", "AutoML".
                     Default is "LinearRegression".
+        auto_ml: If True, trains multiple models for each node and selects the best one.
+                 Overrides model_type setting. Default is False.
+        auto_ml_models: List of model types to test when auto_ml=True.
+                       Default is ["LinearRegression", "RandomForest", "Xgboost", "LightGBM"].
     """
 
     graph: Union[pd.DataFrame, str]
     aggregator: str = "max"
     root_cause_top_k: int = 3
     model_type: str = "LinearRegression"
+    auto_ml: bool = False
+    auto_ml_models: List[str] = None
+
+    def __post_init__(self):
+        """Initialize default auto_ml_models if not provided"""
+        if self.auto_ml_models is None:
+            self.auto_ml_models = ["LinearRegression", "RandomForest", "Xgboost", "LightGBM"]
+
+        # If model_type is "AutoML", enable auto_ml mode
+        if self.model_type.lower() == "automl":
+            self.auto_ml = True
 
 
 class HT(BaseRCA):
@@ -256,14 +271,14 @@ class HT(BaseRCA):
     def _evaluate_classifier(self, model, X, y_true, y_pred, cv_scores=None):
         """
         Evaluate classification model performance.
-        
+
         Returns:
             Dictionary with classification metrics
         """
         # Handle multiclass vs binary
         n_classes = len(np.unique(y_true))
         avg_method = 'binary' if n_classes == 2 else 'weighted'
-        
+
         metrics = {
             'model_type': 'classification',
             'accuracy': round(accuracy_score(y_true, y_pred), 4),
@@ -271,19 +286,144 @@ class HT(BaseRCA):
             'n_samples': len(y_true),
             'n_classes': n_classes,
         }
-        
+
         # Add cross-validation score if available
         if cv_scores is not None and len(cv_scores) > 0:
             metrics['cv_accuracy_mean'] = round(np.mean(cv_scores), 4)
             metrics['cv_accuracy_std'] = round(np.std(cv_scores), 4)
-        
+
         # Add feature importance if available
         if hasattr(model, 'feature_importances_'):
             metrics['has_feature_importance'] = True
         elif hasattr(model, 'coef_'):
             metrics['has_coefficients'] = True
-        
+
         return metrics
+
+    def _create_model_by_name(self, model_name: str, is_classifier: bool = False):
+        """
+        Create a model instance by name.
+
+        Args:
+            model_name: Name of the model type
+            is_classifier: Whether to create a classifier (True) or regressor (False)
+
+        Returns:
+            Model instance
+        """
+        # Temporarily override config model_type
+        original_model_type = self.config.model_type
+        self.config.model_type = model_name
+
+        try:
+            if is_classifier:
+                model = self._create_classifier()
+            else:
+                model = self._create_model()
+        finally:
+            # Restore original model_type
+            self.config.model_type = original_model_type
+
+        return model
+
+    def _train_and_select_best_model(
+        self,
+        X,
+        y,
+        is_categorical: bool,
+        perform_cv: bool = True,
+        cv_folds: int = 5
+    ):
+        """
+        Train multiple models and select the best one based on performance.
+
+        Args:
+            X: Feature matrix
+            y: Target variable
+            is_categorical: Whether target is categorical (classification) or continuous (regression)
+            perform_cv: Whether to perform cross-validation
+            cv_folds: Number of CV folds
+
+        Returns:
+            Tuple of (best_model, best_metrics, best_model_name)
+        """
+        model_names = self.config.auto_ml_models
+        best_model = None
+        best_metrics = None
+        best_model_name = None
+        best_score = -np.inf
+
+        results = []
+
+        for model_name in model_names:
+            try:
+                # Create model
+                model = self._create_model_by_name(model_name, is_classifier=is_categorical)
+
+                # Train model
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    model.fit(X, y)
+
+                # Make predictions
+                y_pred = model.predict(X)
+
+                # Perform cross-validation if requested
+                cv_scores = None
+                if perform_cv and X.shape[0] >= cv_folds * 2:
+                    try:
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            if is_categorical:
+                                cv_scores = cross_val_score(model, X, y, cv=cv_folds, scoring='accuracy')
+                            else:
+                                cv_scores = cross_val_score(model, X, y, cv=cv_folds, scoring='r2')
+                    except Exception:
+                        pass
+
+                # Evaluate model
+                if is_categorical:
+                    metrics = self._evaluate_classifier(model, X, y, y_pred, cv_scores)
+                    # Use accuracy for selection
+                    score = metrics['accuracy']
+                    metric_str = f"Acc: {metrics['accuracy']:.3f}, F1: {metrics['f1_score']:.3f}"
+                else:
+                    metrics = self._evaluate_regressor(model, X, y, y_pred, cv_scores)
+                    # Use R² for selection
+                    score = metrics['r2_score']
+                    metric_str = f"R²: {metrics['r2_score']:.3f}, RMSE: {metrics['rmse']:.3f}"
+
+                results.append({
+                    'model_name': model_name,
+                    'model': model,
+                    'metrics': metrics,
+                    'score': score,
+                    'metric_str': metric_str
+                })
+
+                # Track best model
+                if score > best_score:
+                    best_score = score
+                    best_model = model
+                    best_metrics = metrics
+                    best_model_name = model_name
+
+            except Exception as e:
+                # Skip models that fail to train
+                results.append({
+                    'model_name': model_name,
+                    'model': None,
+                    'metrics': None,
+                    'score': -np.inf,
+                    'error': str(e)[:100]
+                })
+                continue
+
+        # Store auto ML results for inspection
+        if not hasattr(self, 'auto_ml_results'):
+            self.auto_ml_results = {}
+
+        return best_model, best_metrics, best_model_name, results
 
     def train(self, normal_df: pd.DataFrame, perform_cv: bool = True, cv_folds: int = 5, **kwargs):
         """
@@ -327,7 +467,10 @@ class HT(BaseRCA):
                 print(f"   ✓ {node}: CONTINUOUS")
         
         # Step 2: Train models for each node
-        print(f"\n🔧 Training models (model_type: {self.config.model_type})...")
+        if self.config.auto_ml:
+            print(f"\n🤖 Training models (AUTO-ML mode: {len(self.config.auto_ml_models)} models per node)...")
+        else:
+            print(f"\n🔧 Training models (model_type: {self.config.model_type})...")
         
         for node in list(self.graph):
             if node not in normal_df.columns:
@@ -378,45 +521,94 @@ class HT(BaseRCA):
                     self.regressors_dict[node] = [None, scaler]
                     continue
                 
-                # Create appropriate model type
-                if is_node_categorical:
-                    model = self._create_classifier()
-                    model_type_str = "classifier"
-                else:
-                    model = self._create_model()
-                    model_type_str = "regressor"
-                
-                # Train model
+                # Determine if we should use Auto ML or single model
+                use_auto_ml = self.config.auto_ml
+
+                # Train model(s)
                 try:
-                    model.fit(X, y)
-                    y_pred = model.predict(X)
-                    
-                    # Perform cross-validation if requested
-                    cv_scores = None
-                    if perform_cv and X.shape[0] >= cv_folds * 2:
-                        try:
-                            with warnings.catch_warnings():
-                                warnings.simplefilter("ignore")
-                                if is_node_categorical:
-                                    cv_scores = cross_val_score(model, X, y, cv=cv_folds, scoring='accuracy')
-                                else:
-                                    cv_scores = cross_val_score(model, X, y, cv=cv_folds, scoring='r2')
-                        except Exception as e:
-                            print(f"      ⚠️  CV failed: {str(e)[:50]}")
-                    
-                    # Evaluate model
-                    if is_node_categorical:
-                        metrics = self._evaluate_classifier(model, X, y, y_pred, cv_scores)
-                        print(f"   ✓ {node}: {model_type_str} trained | Accuracy: {metrics['accuracy']:.3f} | F1: {metrics['f1_score']:.3f}")
+                    if use_auto_ml:
+                        # AUTO ML MODE: Train multiple models and select the best
+                        best_model, best_metrics, best_model_name, all_results = self._train_and_select_best_model(
+                            X, y, is_node_categorical, perform_cv, cv_folds
+                        )
+
+                        # Store results for this node
+                        if not hasattr(self, 'auto_ml_results'):
+                            self.auto_ml_results = {}
+                        self.auto_ml_results[node] = all_results
+
+                        if best_model is None:
+                            print(f"   ❌ {node}: All AutoML models failed")
+                            # Fallback to simple scaler
+                            if is_node_categorical:
+                                self.regressors_dict[node] = [None, None]
+                            else:
+                                scaler = StandardScaler().fit(y.reshape(-1, 1))
+                                self.regressors_dict[node] = [None, scaler]
+                            continue
+
+                        model = best_model
+                        metrics = best_metrics
+                        model_type_str = "classifier" if is_node_categorical else "regressor"
+
+                        # Print AutoML results
+                        if is_node_categorical:
+                            print(f"   ✓ {node}: AUTO-ML → {best_model_name} | Accuracy: {metrics['accuracy']:.3f} | F1: {metrics['f1_score']:.3f}")
+                        else:
+                            print(f"   ✓ {node}: AUTO-ML → {best_model_name} | R²: {metrics['r2_score']:.3f} | RMSE: {metrics['rmse']:.3f}")
+
+                        # Show other models tested (optional, verbose mode)
+                        if kwargs.get('verbose_automl', False):
+                            print(f"      Tested models:")
+                            for res in all_results:
+                                if res.get('model') is not None:
+                                    print(f"        - {res['model_name']}: {res['metric_str']}")
+                                elif 'error' in res:
+                                    print(f"        - {res['model_name']}: Failed ({res['error'][:50]})")
+
+                        y_pred = model.predict(X)
+
                     else:
-                        metrics = self._evaluate_regressor(model, X, y, y_pred, cv_scores)
-                        print(f"   ✓ {node}: {model_type_str} trained | R²: {metrics['r2_score']:.3f} | RMSE: {metrics['rmse']:.3f}")
-                    
+                        # SINGLE MODEL MODE: Use specified model_type
+                        if is_node_categorical:
+                            model = self._create_classifier()
+                            model_type_str = "classifier"
+                        else:
+                            model = self._create_model()
+                            model_type_str = "regressor"
+
+                        model.fit(X, y)
+                        y_pred = model.predict(X)
+
+                        # Perform cross-validation if requested
+                        cv_scores = None
+                        if perform_cv and X.shape[0] >= cv_folds * 2:
+                            try:
+                                with warnings.catch_warnings():
+                                    warnings.simplefilter("ignore")
+                                    if is_node_categorical:
+                                        cv_scores = cross_val_score(model, X, y, cv=cv_folds, scoring='accuracy')
+                                    else:
+                                        cv_scores = cross_val_score(model, X, y, cv=cv_folds, scoring='r2')
+                            except Exception as e:
+                                print(f"      ⚠️  CV failed: {str(e)[:50]}")
+
+                        # Evaluate model
+                        if is_node_categorical:
+                            metrics = self._evaluate_classifier(model, X, y, y_pred, cv_scores)
+                            print(f"   ✓ {node}: {model_type_str} trained | Accuracy: {metrics['accuracy']:.3f} | F1: {metrics['f1_score']:.3f}")
+                        else:
+                            metrics = self._evaluate_regressor(model, X, y, y_pred, cv_scores)
+                            print(f"   ✓ {node}: {model_type_str} trained | R²: {metrics['r2_score']:.3f} | RMSE: {metrics['rmse']:.3f}")
+
+                    # Common: Store metrics
                     metrics['node'] = node
                     metrics['parents'] = parents
                     metrics['n_parents'] = len(parents)
+                    if use_auto_ml:
+                        metrics['selected_model'] = best_model_name
                     self.model_metrics[node] = metrics
-                    
+
                     # Store model appropriately
                     if is_node_categorical:
                         # For categorical, store model directly (no residual scaler needed)
