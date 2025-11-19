@@ -977,8 +977,19 @@ class HT(BaseRCA):
             if node == anomalous_metrics and node in node_pct_changes:
                 continue
             if node in self.baseline_stats and node in abnormal_df.columns:
+                # Skip categorical variables
+                if self.node_types.get(node) == 'categorical':
+                    node_pct_changes[node] = None
+                    continue
+
                 baseline_mean = self.baseline_stats[node].get("mean")
-                abnormal_mean = abnormal_df[node].mean()
+                try:
+                    abnormal_mean = abnormal_df[node].mean()
+                except (TypeError, ValueError):
+                    # Handle case where column is non-numeric
+                    node_pct_changes[node] = None
+                    continue
+
                 if baseline_mean is not None and abs(baseline_mean) > 1e-9:
                     pct_change = ((abnormal_mean - baseline_mean) / baseline_mean) * 100
                     node_pct_changes[node] = pct_change
@@ -1438,13 +1449,21 @@ class HT(BaseRCA):
         for node in self.graph.nodes():
             # Check if baseline stats exist for this node AND data exists in abnormal_df
             if node in self.baseline_stats and node in abnormal_df.columns:
+                # Skip categorical variables
+                if self.node_types.get(node) == 'categorical':
+                    continue
+
                 # Safely get baseline mean using .get() with a default of None
                 baseline_mean = self.baseline_stats[node].get("mean")
 
                 # Calculate mean for the abnormal period passed to find_root_causes
                 # Check if abnormal data for the node is not empty or all NaN
                 if not abnormal_df[node].isnull().all():
-                    abnormal_mean = abnormal_df[node].mean()
+                    try:
+                        abnormal_mean = abnormal_df[node].mean()
+                    except (TypeError, ValueError):
+                        # Handle case where column is non-numeric
+                        continue
                 else:
                     # Handle cases where abnormal data is missing/NaN for this node
                     abnormal_mean = None

@@ -135,12 +135,19 @@ class DOOperator:
             baseline_val = baseline_values[node]
             post_val = post_intervention_values[node]
 
-            causal_effects[node] = post_val - baseline_val
-
-            if abs(baseline_val) > 1e-9:
-                pct_changes[node] = ((post_val - baseline_val) / baseline_val) * 100
-            else:
+            # Handle categorical variables (strings)
+            if isinstance(baseline_val, str) or isinstance(post_val, str):
+                # For categorical variables, compute effect as 0 (no numeric change)
+                causal_effects[node] = 0.0
                 pct_changes[node] = 0.0
+            else:
+                # For numeric variables, compute numeric effects
+                causal_effects[node] = post_val - baseline_val
+
+                if abs(baseline_val) > 1e-9:
+                    pct_changes[node] = ((post_val - baseline_val) / baseline_val) * 100
+                else:
+                    pct_changes[node] = 0.0
 
         # Identify affected nodes (descendants of intervention)
         affected_nodes = set()
