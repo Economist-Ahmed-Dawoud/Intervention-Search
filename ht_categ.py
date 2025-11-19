@@ -1014,7 +1014,28 @@ class HT(BaseRCA):
             scores = None  # Initialize scores
 
             if parents:
-                abnormal_x = abnormal_df[parents].values
+                # CRITICAL FIX: Handle categorical variables in parent features
+                # Need to encode categorical parents before passing to regressor
+                abnormal_x_raw = abnormal_df[parents].copy()
+
+                # Encode categorical parents if needed
+                abnormal_x_encoded = abnormal_x_raw.copy()
+                for parent in parents:
+                    if self.node_types.get(parent) == 'categorical':
+                        if parent in self.label_encoders:
+                            # Encode using the fitted label encoder
+                            try:
+                                abnormal_x_encoded[parent] = self.label_encoders[parent].transform(abnormal_x_raw[parent])
+                            except ValueError:
+                                # Handle unseen categories by using the most frequent class
+                                known_classes = self.label_encoders[parent].classes_
+                                abnormal_x_encoded[parent] = abnormal_x_raw[parent].apply(
+                                    lambda x: self.label_encoders[parent].transform([x])[0]
+                                    if x in known_classes
+                                    else self.label_encoders[parent].transform([known_classes[0]])[0]
+                                )
+
+                abnormal_x = abnormal_x_encoded.values
                 if abnormal_x.shape[1] > 0 and node in self.regressors_dict:
                     regressor, scaler = self.regressors_dict[node]
                     if regressor:  # If a model exists
