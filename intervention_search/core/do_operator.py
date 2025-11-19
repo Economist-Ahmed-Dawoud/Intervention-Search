@@ -204,6 +204,7 @@ class DOOperator:
         Propagate through mutilated graph with interventions fixed.
 
         Uses topological order to ensure parents are computed before children.
+        CRITICAL: Only descendants of intervened nodes should be updated!
 
         Args:
             mutilated_graph: Graph with intervention edges removed
@@ -220,6 +221,14 @@ class DOOperator:
         for node, value in intervention_values.items():
             values[node] = value
 
+        # CRITICAL FIX: Identify all descendants of intervention nodes
+        # Only these nodes should be updated; all others must stay at baseline
+        intervened_nodes = set(intervention_values.keys())
+        affected_nodes = set()
+        for int_node in intervened_nodes:
+            affected_nodes.update(nx.descendants(self.graph, int_node))
+            affected_nodes.add(int_node)
+
         # Get topological order of mutilated graph
         try:
             topo_order = list(nx.topological_sort(mutilated_graph))
@@ -231,6 +240,11 @@ class DOOperator:
         for node in topo_order:
             # Skip intervened nodes (already fixed)
             if node in intervention_values:
+                continue
+
+            # CRITICAL FIX: Skip nodes that are NOT descendants of intervention
+            # These nodes are unaffected and MUST remain at baseline
+            if node not in affected_nodes:
                 continue
 
             # Get parents in mutilated graph

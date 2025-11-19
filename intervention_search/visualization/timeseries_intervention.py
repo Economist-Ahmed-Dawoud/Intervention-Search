@@ -122,7 +122,18 @@ class TimeSeriesInterventionAnalyzer:
             if date_column not in historical_data.columns:
                 raise ValueError(f"Date column '{date_column}' not found!")
 
-            dates = pd.to_datetime(historical_data[date_column]).tolist()
+            # CRITICAL FIX: Check if date column contains integers (period numbers)
+            # If so, treat as period indices rather than timestamps
+            date_col_data = historical_data[date_column]
+            if pd.api.types.is_integer_dtype(date_col_data) or pd.api.types.is_numeric_dtype(date_col_data):
+                # Integer or numeric period column - convert to proper dates
+                # Use a recent base date and add the period as days offset
+                base_date = datetime(2023, 1, 1)  # Use a reasonable base date
+                dates = [base_date + timedelta(days=int(i)) for i in date_col_data]
+            else:
+                # String or datetime column - parse normally
+                dates = pd.to_datetime(historical_data[date_column]).tolist()
+
             data = historical_data.copy()
         else:
             # Use index as dates
