@@ -103,7 +103,8 @@ print("\n" + "="*70)
 print("TEST 1: Quality Metrics in Results")
 print("="*70)
 
-best = results['best_intervention']
+# Get best candidate (marked with best=True flag)
+best = next(c for c in results['all_candidates'] if c['best'])
 
 try:
     quality_grade = best['quality']['quality_grade']

@@ -84,7 +84,8 @@ results = searcher.find_interventions(
     verbose=False
 )
 
-best = results['best_intervention']
+# Get best candidate (marked with best=True flag)
+best = next(c for c in results['all_candidates'] if c['best'])
 
 print("\n" + "="*80)
 print("RESULTS")

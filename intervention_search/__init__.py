@@ -28,10 +28,11 @@ Quick Start:
     ...     tolerance=3.0
     ... )
     >>>
-    >>> # Get recommendation
-    >>> best = results['best_intervention']
+    >>> # Get recommendation (best candidate has best=True flag)
+    >>> best = next(c for c in results['all_candidates'] if c['best'])
     >>> print(f"Intervene on {best['nodes']}: {best['required_pct_changes']}")
-    >>> print(f"Expected effect: {best['actual_effect']}% ± {best['prediction_uncertainty_std']}%")
+    >>> print(f"Summary: {best['summary']}")
+    >>> print(f"Priority: {best['priority']}, Confidence: {best['confidence']}")
 
 Version: 2.0.0
 """

@@ -107,7 +107,8 @@ try:
         verbose=False
     )
 
-    best = results['best_intervention']
+    # Get best candidate (marked with best=True flag)
+    best = next(c for c in results['all_candidates'] if c['best'])
     print(f"   ✅ Search complete: {', '.join(best['nodes'])} ({best['actual_effect']:+.1f}%)")
 except Exception as e:
     print(f"   ❌ Error: {e}")
@@ -211,7 +212,8 @@ print(f"   • Data loaded: {len(df)} stores")
 print(f"   • Graph: {len(nodes)} nodes, {len(edges)} edges")
 print(f"   • Model quality: {mean_r2:.3f} mean R²")
 print(f"   • Best intervention: {', '.join(best['nodes'])} ({best['actual_effect']:+.1f}%)")
-print(f"   • Confidence: {best['confidence']:.1%}")
+# confidence is now text ("High", "Medium", "Low"), numeric value is in confidence_score
+print(f"   • Confidence: {best['confidence']} ({best.get('confidence_score', 0):.1%})")
 print(f"   • DO operator: {'✅ Valid' if verification['all_checks_passed'] else '❌ Failed'}")
 print("\n✅ Notebook is ready to use!")
 print("="*70)
