@@ -259,7 +259,8 @@ print("\n" + "="*70)
 print("DETAILED ANALYSIS OF BEST INTERVENTION")
 print("="*70)
 
-best = results_bhi['best_intervention']
+# Get best candidate (marked with best=True flag)
+best = next((c for c in results_bhi['all_candidates'] if c['best']), None)
 
 if best:
     print(f"\n📊 Intervention Details:")

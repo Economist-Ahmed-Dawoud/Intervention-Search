@@ -27,6 +27,187 @@ from ..search.ranker import InterventionRanker, RankingWeights
 warnings.filterwarnings('ignore')
 
 
+def _generate_intervention_text_fields(
+    intervention_node: str,
+    outcome_node: str,
+    intervention_pct_change: float,
+    outcome_effect: float,
+    confidence_score: float,
+    quality_grade: str = 'C'
+) -> dict:
+    """
+    Generate text templates and additional fields for platform compatibility.
+
+    Smart template generation that recognizes positive/negative directions.
+
+    Args:
+        intervention_node: Name of the intervened variable
+        outcome_node: Name of the outcome variable
+        intervention_pct_change: Percentage change in intervention (e.g., -5.36)
+        outcome_effect: Predicted percentage effect on outcome (e.g., -27.95)
+        confidence_score: Confidence score 0-1
+        quality_grade: Model quality grade (A, B, C, D, F)
+
+    Returns:
+        Dictionary with: details, summary, priority, validity, confidence,
+                        opportunityValue, recommendationDetail
+    """
+    # Determine direction words for intervention
+    if intervention_pct_change < 0:
+        intervention_action = "decrease"
+        intervention_action_summary = "Reduce"
+    else:
+        intervention_action = "increase"
+        intervention_action_summary = "Increase"
+
+    # Determine direction words for outcome
+    if outcome_effect < 0:
+        outcome_direction = "bring down"
+        outcome_action_summary = "reduce"
+    else:
+        outcome_direction = "bring up"
+        outcome_action_summary = "increase"
+
+    # Format percentages for display
+    intervention_pct_display = abs(intervention_pct_change)
+    outcome_pct_display = round(outcome_effect, 2)
+
+    # Build path string
+    path_string = f"{intervention_node} -> {outcome_node}"
+
+    # Build summary: "Reduce X by Y% to achieve reduce in Z"
+    summary = (
+        f"{intervention_action_summary} {intervention_node} by {intervention_pct_display:.1f}% "
+        f"to achieve {outcome_action_summary} in {outcome_node}"
+    )
+
+    # Build recommendation detail
+    recommendation_detail = (
+        f"To {outcome_direction} {outcome_node} by {outcome_pct_display}%, "
+        f"the easiest lever (by % change) is to {intervention_action} "
+        f"{intervention_node} by {abs(intervention_pct_change):.2f}%"
+    )
+
+    # Compute priority based on confidence
+    if confidence_score >= 0.7:
+        priority = "High"
+    elif confidence_score >= 0.5:
+        priority = "Medium"
+    else:
+        priority = "Low"
+
+    # Compute validity (days) based on model quality grade
+    validity_map = {'A': 30, 'B': 28, 'C': 21, 'D': 14, 'F': 7}
+    validity = validity_map.get(quality_grade, 21)
+
+    # Compute confidence text
+    if confidence_score >= 0.7:
+        confidence_text = "High"
+    elif confidence_score >= 0.5:
+        confidence_text = "Medium"
+    else:
+        confidence_text = "Low"
+
+    return {
+        'details': [{'path': path_string}],
+        'summary': summary,
+        'priority': priority,
+        'validity': validity,
+        'confidence': confidence_text,
+        'opportunityValue': None,
+        'recommendationDetail': recommendation_detail
+    }
+
+
+def _generate_combination_text_fields(
+    intervention_nodes: list,
+    outcome_node: str,
+    intervention_pct_changes: dict,
+    outcome_effect: float,
+    confidence_score: float,
+    quality_grade: str = 'C'
+) -> dict:
+    """
+    Generate text templates for multi-node combination interventions.
+
+    Args:
+        intervention_nodes: List of intervened variable names
+        outcome_node: Name of the outcome variable
+        intervention_pct_changes: Dict mapping node -> pct_change
+        outcome_effect: Predicted percentage effect on outcome
+        confidence_score: Confidence score 0-1
+        quality_grade: Model quality grade
+
+    Returns:
+        Dictionary with platform-compatible fields
+    """
+    # Build path string for multiple nodes
+    path_parts = [f"{node} -> {outcome_node}" for node in intervention_nodes]
+    path_string = " | ".join(path_parts)
+
+    # Determine outcome direction
+    if outcome_effect < 0:
+        outcome_direction = "bring down"
+        outcome_action_summary = "reduce"
+    else:
+        outcome_direction = "bring up"
+        outcome_action_summary = "increase"
+
+    # Build intervention descriptions
+    intervention_descriptions = []
+    for node in intervention_nodes:
+        pct = intervention_pct_changes.get(node, 0)
+        action = "reduce" if pct < 0 else "increase"
+        intervention_descriptions.append(f"{action} {node} by {abs(pct):.1f}%")
+
+    interventions_text = " and ".join(intervention_descriptions)
+
+    # Build summary
+    summary = f"{interventions_text.capitalize()} to achieve {outcome_action_summary} in {outcome_node}"
+
+    # Build recommendation detail for combinations
+    levers_text = []
+    for node in intervention_nodes:
+        pct = intervention_pct_changes.get(node, 0)
+        action = "decrease" if pct < 0 else "increase"
+        levers_text.append(f"{action} {node} by {abs(pct):.2f}%")
+
+    recommendation_detail = (
+        f"To {outcome_direction} {outcome_node} by {round(outcome_effect, 2)}%, "
+        f"the recommended combination is to {' and '.join(levers_text)}"
+    )
+
+    # Compute priority
+    if confidence_score >= 0.7:
+        priority = "High"
+    elif confidence_score >= 0.5:
+        priority = "Medium"
+    else:
+        priority = "Low"
+
+    # Compute validity
+    validity_map = {'A': 30, 'B': 28, 'C': 21, 'D': 14, 'F': 7}
+    validity = validity_map.get(quality_grade, 21)
+
+    # Confidence text
+    if confidence_score >= 0.7:
+        confidence_text = "High"
+    elif confidence_score >= 0.5:
+        confidence_text = "Medium"
+    else:
+        confidence_text = "Low"
+
+    return {
+        'details': [{'path': path_string}],
+        'summary': summary,
+        'priority': priority,
+        'validity': validity,
+        'confidence': confidence_text,
+        'opportunityValue': None,
+        'recommendationDetail': recommendation_detail
+    }
+
+
 class InterventionSearch:
     """
     Production-ready Intervention Search System.
@@ -46,11 +227,12 @@ class InterventionSearch:
         ...     max_candidates=10
         ... )
         >>>
-        >>> # Get best recommendation
-        >>> best = results['best_intervention']
+        >>> # Get best recommendation (marked with best=True)
+        >>> best = next(c for c in results['all_candidates'] if c['best'])
         >>> print(f"Intervene on: {best['nodes']}")
         >>> print(f"Expected effect: {best['actual_effect']:+.1f}%")
-        >>> print(f"90% CI: [{best['ci_90'][0]:+.1f}%, {best['ci_90'][1]:+.1f}%]")
+        >>> print(f"Summary: {best['summary']}")
+        >>> print(f"Priority: {best['priority']}, Confidence: {best['confidence']}")
     """
 
     def __init__(
@@ -143,8 +325,16 @@ class InterventionSearch:
 
         Returns:
             Dictionary with:
-                - best_intervention: Top recommendation
-                - all_candidates: All viable options (ranked)
+                - all_candidates: All viable options (ranked), each containing:
+                    - best: Boolean flag (True for top recommendation)
+                    - details: List with path info [{'path': 'X -> Y'}]
+                    - summary: Human-readable intervention summary
+                    - priority: "High", "Medium", or "Low"
+                    - validity: Days the recommendation is valid (int)
+                    - confidence: "High", "Medium", or "Low" (text)
+                    - confidence_score: Original numeric confidence (0-1)
+                    - opportunityValue: Optional value (null by default)
+                    - recommendationDetail: Detailed recommendation text
                 - quality_report: Model quality assessment
                 - path_analysis: Causal path analysis
                 - summary: Summary statistics
@@ -246,6 +436,61 @@ class InterventionSearch:
         # Get top candidates
         top_candidates = ranked_results[:max_candidates]
 
+        # Compute summary statistics BEFORE enrichment (while confidence is still numeric)
+        summary_stats = {
+            'total_tested': len(all_results),
+            'passed_validation': len(validated_results),
+            'within_tolerance': sum(1 for r in ranked_results if r.get('within_tolerance', False)),
+            'high_confidence': sum(1 for r in ranked_results if r.get('confidence', 0) >= 0.7),
+            'target_achieved': top_candidates[0].get('within_tolerance', False) if top_candidates else False
+        }
+
+        # Enrich each candidate with platform-compatible fields
+        for idx, candidate in enumerate(top_candidates):
+            # Add 'best' flag - first candidate is best
+            candidate['best'] = (idx == 0)
+
+            # Get quality grade for validity calculation
+            quality_info = candidate.get('quality', {})
+            quality_grade = quality_info.get('quality_grade', 'C')
+            confidence_score = candidate.get('confidence', 0.5)
+
+            # Generate text fields based on intervention type
+            if candidate.get('intervention_type') == 'single':
+                intervention_node = candidate['nodes'][0]
+                intervention_pct = candidate['required_pct_changes'].get(intervention_node, 0)
+                outcome_effect = candidate.get('actual_effect', 0)
+
+                text_fields = _generate_intervention_text_fields(
+                    intervention_node=intervention_node,
+                    outcome_node=target_outcome,
+                    intervention_pct_change=intervention_pct,
+                    outcome_effect=outcome_effect,
+                    confidence_score=confidence_score,
+                    quality_grade=quality_grade
+                )
+            else:
+                # Combination intervention
+                text_fields = _generate_combination_text_fields(
+                    intervention_nodes=candidate['nodes'],
+                    outcome_node=target_outcome,
+                    intervention_pct_changes=candidate.get('required_pct_changes', {}),
+                    outcome_effect=candidate.get('actual_effect', 0),
+                    confidence_score=confidence_score,
+                    quality_grade=quality_grade
+                )
+
+            # Add all text fields to candidate
+            # Preserve numeric confidence as confidence_score, use 'confidence' for text
+            candidate['confidence_score'] = candidate.get('confidence', 0.5)
+            candidate['details'] = text_fields['details']
+            candidate['summary'] = text_fields['summary']
+            candidate['priority'] = text_fields['priority']
+            candidate['validity'] = text_fields['validity']
+            candidate['confidence'] = text_fields['confidence']  # Text version: "High", "Medium", "Low"
+            candidate['opportunityValue'] = text_fields['opportunityValue']
+            candidate['recommendationDetail'] = text_fields['recommendationDetail']
+
         # Analyze best intervention paths
         best = top_candidates[0] if top_candidates else None
 
@@ -263,18 +508,12 @@ class InterventionSearch:
         if verbose:
             self._print_results(best, top_candidates, target_change)
 
+        # Return structure without duplication - 'best' flag indicates best intervention
         return {
-            'best_intervention': best,
             'all_candidates': top_candidates,
             'quality_report': quality_summary,
             'path_analysis': path_analysis,
-            'summary': {
-                'total_tested': len(all_results),
-                'passed_validation': len(validated_results),
-                'within_tolerance': sum(1 for r in ranked_results if r.get('within_tolerance', False)),
-                'high_confidence': sum(1 for r in ranked_results if r.get('confidence', 0) >= 0.7),
-                'target_achieved': best.get('within_tolerance', False) if best else False
-            }
+            'summary': summary_stats
         }
 
     def _search_single_node_interventions(
