@@ -834,7 +834,7 @@ class InterventionSearch:
         print(f"\n   Predicted Effect: {best['actual_effect']:+.1f}% (target: {target_change:+.1f}%)")
         print(f"   90% Confidence Interval: [{best['ci_90'][0]:+.1f}%, {best['ci_90'][1]:+.1f}%]")
         print(f"   50% Confidence Interval: [{best['ci_50'][0]:+.1f}%, {best['ci_50'][1]:+.1f}%]")
-        print(f"   Confidence Score: {best['confidence']:.0%}")
+        print(f"   Confidence Score: {best['confidence_score']:.0%}")
 
         status = "✅ APPROVED" if best.get('within_tolerance', False) else "⚠️  CAUTION"
         print(f"\n   Status: {status}")
