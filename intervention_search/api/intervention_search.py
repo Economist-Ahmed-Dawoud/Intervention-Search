@@ -302,6 +302,7 @@ class InterventionSearch:
         candidate_nodes: Optional[List[str]] = None,
         tolerance: float = 3.0,
         max_intervention_pct: float = 30.0,
+        intervention_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
         allow_combinations: bool = False,
         max_candidates: int = 10,
         confidence_level: float = 0.90,
@@ -317,6 +318,11 @@ class InterventionSearch:
             candidate_nodes: List of nodes to consider (None = all ancestors)
             tolerance: Acceptable error in percentage points (default: ±3%)
             max_intervention_pct: Maximum allowed intervention (default: ±30%)
+            intervention_bounds: Per-node bounds for intervention direction/magnitude.
+                Example: {'Marketing': (0, 30), 'Price': (-20, 0)}
+                - (0, 30) = only positive interventions (0% to +30%)
+                - (-20, 0) = only negative interventions (-20% to 0%)
+                - Nodes not specified use (-max_intervention_pct, +max_intervention_pct)
             allow_combinations: Whether to test 2-node combinations
             max_candidates: Maximum number of candidates to return
             confidence_level: Confidence level for intervals (default: 0.90)
@@ -379,6 +385,7 @@ class InterventionSearch:
             target_change=target_change,
             tolerance=tolerance,
             max_intervention_pct=max_intervention_pct,
+            intervention_bounds=intervention_bounds,
             min_model_quality=min_model_quality,
             verbose=verbose
         )
@@ -396,6 +403,7 @@ class InterventionSearch:
                 target_change=target_change,
                 tolerance=tolerance,
                 max_intervention_pct=max_intervention_pct,
+                intervention_bounds=intervention_bounds,
                 max_combos=10,
                 verbose=verbose
             )
@@ -523,6 +531,7 @@ class InterventionSearch:
         target_change: float,
         tolerance: float,
         max_intervention_pct: float,
+        intervention_bounds: Optional[Dict[str, Tuple[float, float]]],
         min_model_quality: float,
         verbose: bool
     ) -> List[Dict]:
@@ -546,6 +555,12 @@ class InterventionSearch:
             if verbose:
                 print(f"   Testing: {node}...", end=" ")
 
+            # Get bounds for this node (use per-node bounds if specified, else default)
+            if intervention_bounds and node in intervention_bounds:
+                node_bounds = intervention_bounds[node]
+            else:
+                node_bounds = (-max_intervention_pct, max_intervention_pct)
+
             # Define objective function for this node
             def objective_fn(pct_change):
                 return self._simulate_single_intervention(node, pct_change, outcome_node)
@@ -553,7 +568,7 @@ class InterventionSearch:
             # Use adaptive search
             optimizer = AdaptiveGridSearch(
                 objective_function=objective_fn,
-                bounds=(-max_intervention_pct, max_intervention_pct),
+                bounds=node_bounds,
                 target_value=target_change,
                 tolerance=tolerance,
                 max_iterations=15
@@ -614,6 +629,7 @@ class InterventionSearch:
         target_change: float,
         tolerance: float,
         max_intervention_pct: float,
+        intervention_bounds: Optional[Dict[str, Tuple[float, float]]],
         max_combos: int,
         verbose: bool
     ) -> List[Dict]:
@@ -623,6 +639,12 @@ class InterventionSearch:
         results = []
         good_nodes = candidate_nodes[:10]  # Limit for performance
 
+        # Helper to get bounds for a node
+        def get_node_bounds(node):
+            if intervention_bounds and node in intervention_bounds:
+                return intervention_bounds[node]
+            return (-max_intervention_pct, max_intervention_pct)
+
         for node1, node2 in list(combinations(good_nodes, 2))[:max_combos]:
             # Define objective for combination
             def objective_fn(intervention_dict):
@@ -631,8 +653,8 @@ class InterventionSearch:
             optimizer = MultiNodeOptimizer(
                 objective_function=objective_fn,
                 node_bounds={
-                    node1: (-max_intervention_pct, max_intervention_pct),
-                    node2: (-max_intervention_pct, max_intervention_pct)
+                    node1: get_node_bounds(node1),
+                    node2: get_node_bounds(node2)
                 },
                 target_value=target_change,
                 tolerance=tolerance,
@@ -834,7 +856,7 @@ class InterventionSearch:
         print(f"\n   Predicted Effect: {best['actual_effect']:+.1f}% (target: {target_change:+.1f}%)")
         print(f"   90% Confidence Interval: [{best['ci_90'][0]:+.1f}%, {best['ci_90'][1]:+.1f}%]")
         print(f"   50% Confidence Interval: [{best['ci_50'][0]:+.1f}%, {best['ci_50'][1]:+.1f}%]")
-        print(f"   Confidence Score: {best['confidence']:.0%}")
+        print(f"   Confidence Score: {best['confidence_score']:.0%}")
 
         status = "✅ APPROVED" if best.get('within_tolerance', False) else "⚠️  CAUTION"
         print(f"\n   Status: {status}")
